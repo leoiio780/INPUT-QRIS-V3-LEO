@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>INPUT QRIS V3 </title>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+
+body{
+    font-family:Arial, sans-serif;
+    margin:20px;
+}
+
+textarea{
+    width:100%;
+    height:280px;
+    padding:10px;
+    font-size:14px;
+    box-sizing:border-box;
+}
+
+button{
+    padding:10px 15px;
+    margin:10px 5px 10px 0;
+    cursor:pointer;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    margin-top:15px;
+}
+
+th,td{
+    border:1px solid #ddd;
+    padding:8px;
+}
+
+th{
+    background:#f4f4f4;
+    text-align:center;
+}
+
+.success{
+    color:green;
+    font-weight:bold;
+}
+
+.pending{
+    color:orange;
+    font-weight:bold;
+}
+
+.failed{
+    color:red;
+    font-weight:bold;
+}
+
+.cross{
+    color:red;
+    font-weight:bold;
+}
+
+.normal{
+    color:#222;
+}
+
+.summary{
+    margin-top:15px;
+    padding:12px;
+    background:#f8f8f8;
+    border-radius:6px;
+}
+
+.table-container{
+    overflow-x:auto;
+}
+
+</style>
+</head>
+
+<body>
+
+<h2>INPUT QRIS</h2>
+
+<textarea
+    id="rawData"
+    placeholder="Tempel Datanya Di Sini Ya Boskuuu..."
+></textarea>
+
+<br>
+
+<button onclick="parseData()">Proses</button>
+
+<button onclick="downloadExcel()">
+    Download Excel
+</button>
+
+<button onclick="clearData()">
+    Clear
+</button>
+
+<div id="summary" class="summary">
+    Belum ada data
+</div>
+
+<div class="table-container">
+
+<table>
+
+<thead>
+<tr>
+    <th>No</th>
+    <th>Member</th>
+    <th>RRN</th>
+    <th>Nominal</th>
+    <th>Status</th>
+    <th>Keterangan</th>
+</tr>
+</thead>
+
+<tbody id="tbody"></tbody>
+
+</table>
+
+</div>
+
+
+<script>
+
+let excelData = [];
+
+
+/* =====================================
+   FORMAT NOMINAL
+   50000 -> 50.000
+===================================== */
+
+function formatNominal(value){
+
+    return Number(value || 0).toString();
+
+}
+
+
+/* =====================================
+   PARSE NOMINAL
+   50.000 -> 50000
+===================================== */
+
+function parseNominal(value){
+
+    if(!value) return 0;
+
+    return Number(
+        value
+        .toString()
+        .trim()
+        .replace(/\./g,"")
+        .replace(/,/g,"")
+    ) || 0;
+
+}
+
+
+/* =====================================
+   AMBIL TANGGAL DARI DATE REQUEST
+
+   2026-09-02T23:58:34+07:00+007
+   ->
+   2026-09-02
+===================================== */
+
+function getRequestDate(value){
+
+    if(!value) return "";
+
+    const match = value.match(
+        /^(\d{4})-(\d{2})-(\d{2})/
+    );
+
+    if(match){
+        return `${match[1]}-${match[2]}-${match[3]}`;
+    }
+
+    return "";
+
+}
+
+
+/* =====================================
+   AMBIL TANGGAL DARI APPROVE
+
+   03-09-2026 00:02:06
+   ->
+   2026-09-03
+===================================== */
+
+function getApproveDate(value){
+
+    if(!value) return "";
+
+    const match = value.match(
+        /^(\d{2})-(\d{2})-(\d{4})/
+    );
+
+    if(match){
+        return `${match[3]}-${match[2]}-${match[1]}`;
+    }
+
+    return "";
+
+}
+
+
+/* =====================================
+   FORMAT DATE REQUEST UNTUK KETERANGAN
+===================================== */
+
+function formatRequest(value){
+
+    if(!value) return "";
+
+    const match = value.match(
+        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/
+    );
+
+    if(!match){
+        return value;
+    }
+
+    return `${match[3]}-${match[2]}-${match[1]} ${match[4]}:${match[5]}:${match[6]}`;
+
+}
+
+
+/* =====================================
+   ESCAPE HTML
+===================================== */
+
+function escapeHtml(value){
+
+    return String(value || "")
+        .replace(/&/g,"&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;")
+        .replace(/'/g,"&#039;");
+
+}
+
+
+/* =====================================
+   PROSES DATA
+===================================== */
+
+function parseData(){
+
+    const raw =
+        document.getElementById("rawData").value;
+
+    const tbody =
+        document.getElementById("tbody");
+
+    tbody.innerHTML = "";
+
+    excelData = [];
+
+
+    if(!raw.trim()){
+
+        document.getElementById("summary").innerHTML =
+            "Belum ada data";
+
+        return;
+
+    }
+
+
+    const lines =
+        raw.replace(/\r/g,"").split("\n");
+
+
+    let no = 1;
+
+    let totalNominal = 0;
+
+    let totalCross = 0;
+
+    let totalSuccess = 0;
+
+    let totalPending = 0;
+
+    let totalFailed = 0;
+
+
+    lines.forEach(line => {
+
+        line = line.trim();
+
+        if(!line) return;
+
+
+        /* Skip header */
+
+        if(
+            line.startsWith("No.") ||
+            line.includes("Date Request") ||
+            line.includes("Member Name")
+        ){
+            return;
+        }
+
+
+        /* Hanya proses baris yang diawali nomor */
+
+        if(!/^\d+\./.test(line)){
+            return;
+        }
+
+
+        /*
+        =========================================
+        STRUKTUR DATA ASLI ANDA
+
+        0  = No
+        1  = ID
+        2  = Date Request
+        3  = Toko
+        4  = Member
+        5  = Merchant
+        6  = RRN
+        7  = Amount
+        8  = Fee
+        9  = Revenue
+        10 = Payment
+        11 = Approve
+        12 = Settlement
+        13 = Bonus
+        14 = Status
+        =========================================
+        */
+
+
+        const cols = line.split("\t");
+
+
+        if(cols.length < 12){
+            return;
+        }
+
+
+        /* MEMBER */
+
+        const member =
+            (cols[4] || "").trim();
+
+
+        /* RRN */
+
+        const rrn =
+            (cols[6] || "").trim();
+
+
+        /* AMOUNT */
+
+        const nominal =
+            parseNominal(cols[7]);
+
+
+        /* DATE REQUEST */
+
+        const dateRequest =
+            (cols[2] || "").trim();
+
+
+        /* APPROVE */
+
+        const approve =
+            (cols[11] || "").trim();
+
+
+        /* STATUS */
+
+        const status =
+            (cols[cols.length - 1] || "")
+            .trim()
+            .toUpperCase();
+
+
+        /*
+        =========================================
+        CEK STATUS
+        =========================================
+        */
+
+        let statusClass = "";
+
+
+        if(status === "SUCCESS"){
+
+            statusClass = "success";
+            totalSuccess++;
+
+        }
+        else if(status === "PENDING"){
+
+            statusClass = "pending";
+            totalPending++;
+
+        }
+        else if(
+            status === "FAILED" ||
+            status === "FAIL" ||
+            status === "CANCEL"
+        ){
+
+            statusClass = "failed";
+            totalFailed++;
+
+        }
+
+
+        /*
+        =========================================
+        GANTI TANGGAL
+        =========================================
+        */
+
+        const requestDate =
+            getRequestDate(dateRequest);
+
+        const approveDate =
+            getApproveDate(approve);
+
+
+        let keterangan = "NORMAL";
+
+        let keteranganClass = "normal";
+
+
+        if(requestDate && approveDate){
+
+            if(requestDate !== approveDate){
+
+                keterangan =
+                    `GANTI TANGGAL (${formatRequest(dateRequest)} → ${approve})`;
+
+                keteranganClass = "cross";
+
+                totalCross++;
+
+            }
+
+        }
+
+
+        /*
+        =========================================
+        TOTAL
+        =========================================
+        */
+
+        totalNominal += nominal;
+
+
+        /*
+        =========================================
+        SIMPAN DATA EXCEL
+        =========================================
+        */
+
+        excelData.push({
+
+            "No": no,
+
+            "Member": member,
+
+            "RRN": rrn,
+
+            "Nominal": nominal,
+
+            "Status": status,
+
+            "Keterangan": keterangan
+
+        });
+
+
+        /*
+        =========================================
+        TAMPILKAN TABLE
+        =========================================
+        */
+
+        tbody.innerHTML += `
+
+        <tr>
+
+            <td>${no}</td>
+
+            <td>
+                ${escapeHtml(member)}
+            </td>
+
+            <td>
+                ${escapeHtml(rrn)}
+            </td>
+
+            <td>
+                ${formatNominal(nominal)}
+            </td>
+
+            <td class="${statusClass}">
+                ${escapeHtml(status)}
+            </td>
+
+            <td class="${keteranganClass}">
+                ${escapeHtml(keterangan)}
+            </td>
+
+        </tr>
+
+        `;
+
+
+        no++;
+
+    });
+
+
+    /*
+    =========================================
+    SUMMARY
+    =========================================
+    */
+
+    document.getElementById("summary").innerHTML = `
+
+        Total Data:
+        <b>${excelData.length}</b>
+
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+
+        Total Nominal:
+        <b>${formatNominal(totalNominal)}</b>
+
+        <br>
+
+        SUCCESS:
+        <b class="success">${totalSuccess}</b>
+
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+
+        PENDING:
+        <b class="pending">${totalPending}</b>
+
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+
+        FAILED:
+        <b class="failed">${totalFailed}</b>
+
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+
+        GANTI TANGGAL:
+        <b class="${totalCross > 0 ? "cross" : "normal"}">
+            ${totalCross}
+        </b>
+
+    `;
+
+}
+
+
+/* =====================================
+   DOWNLOAD EXCEL
+===================================== */
+
+function downloadExcel(){
+
+    if(excelData.length === 0){
+
+        alert("Belum ada data");
+
+        return;
+
+    }
+
+
+    const ws =
+        XLSX.utils.json_to_sheet(excelData);
+
+
+    ws["!cols"] = [
+
+        {wch:8},
+        {wch:20},
+        {wch:20},
+        {wch:15},
+        {wch:15},
+        {wch:60}
+
+    ];
+
+
+    const wb =
+        XLSX.utils.book_new();
+
+
+    XLSX.utils.book_append_sheet(
+        wb,
+        ws,
+        "QRIS"
+    );
+
+
+    XLSX.writeFile(
+        wb,
+        "hasil_qris.xlsx"
+    );
+
+}
+
+
+/* =====================================
+   CLEAR
+===================================== */
+
+function clearData(){
+
+    document.getElementById("rawData").value = "";
+
+    document.getElementById("tbody").innerHTML = "";
+
+    document.getElementById("summary").innerHTML =
+        "Belum ada data";
+
+    excelData = [];
+
+}
+
+</script>
+
+</body>
+</html>
